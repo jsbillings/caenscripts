@@ -1,0 +1,1423 @@
+#!/usr/um/bin/perl5
+
+# $Log: redot,v $
+# Revision 2.0  1999/08/06 20:53:38  stormy
+# Expanded fixes for missing directories and other AFS problems
+# Added ability to redot specific files, or exclude specific files
+# Added ability to copy directories
+# Added ability to copy symbolic links, e.g. .Xdefaults -> .Xsession
+# More informative errors/output
+# Added --nobackup flag if users don't want backups of existing dotfiles
+# Added --user flag to redot somebody else
+# Added --skipdot to do only basic checks
+#
+
+# Perl mumbo jumbo
+
+use Getopt::Long;
+
+#
+# Information about this program
+#
+
+# Unbuffer STDOUT
+$| = 1;
+
+# Trap interrupt signal
+$SIG{'INT'} = 'abort';
+
+# The revision number of this program
+$REV  =  '$Revision: 2.0 $';
+$REV  =~ s/.*Revision: |\ \$$//g;
+
+# The date this program was last modified
+$RDATE =  '$Date: 1999/08/06 20:53:38 $';
+$RDATE =~ s/.*Date: |\ \$$//g;
+
+# Preserve the original command line for logging purposes
+@COMMAND_LINE = ($0,@ARGV);
+
+# The name of this program
+($PROGRAM) = reverse split("\/", $0);
+
+#
+# Frequently changed variables
+#
+
+# Name of the pager program (e.g. more) to use
+$pager = "/usr/bin/more";
+
+# Location of skel directory
+$skeldir = "/afs/engin.umich.edu/caen/generic/skel";
+
+# Name of the computer help
+$help_name = "the CAEN Hotline";
+
+# A phone number where help can be reached
+$help_phone = "734-764-CAEN";
+
+# An address where help can be reached
+$help_address = "the Duderstadt Center, Room 1315";
+
+# Message about contacting the help
+$contact = "Please call ${help_name} at ${help_phone} if you have questions.\n";
+
+# The bell
+$bell = "\007";
+
+# The UNIX quota command
+$quota = "/usr/ucb/quota";
+
+# The AFS fs command
+if (-x "/usr/caen/bin/fs") {
+   $fs = "/usr/caen/bin/fs";
+} elsif (-x "/usr/um/bin/fs") {
+   $fs = "/usr/um/bin/fs";
+} elsif (-x "/usr/bin/fs") {
+   $fs = "/usr/bin/fs";
+}
+
+# The AFS pts command
+if (-x "/usr/caen/bin/pts") {
+   $pts = "/usr/caen/bin/pts";
+} elsif (-x "/usr/um/bin/pts") {
+   $pts = "/usr/um/bin/pts";
+} elsif (-x "/usr/bin/pts") {
+   $pts = "/usr/bin/pts";
+}
+
+# Local AFS cell
+$ourcell = "engin.umich.edu";
+
+# The AFS tokens command
+$tokens = "/usr/um/bin/tokens";
+
+# The UNIX cp command
+$cp = "/bin/cp";
+
+# Path to the "rm" command
+$rm = "/bin/rm";
+
+# Name of the "Public" directory in users' home directories
+$public = "Public";
+
+# Name of the "Private" directory in users' home directories
+$private = "Private";
+
+# Name of the OldFiles directory
+$oldfiles = "OldFiles";
+
+# Location of the "klog" command
+$klog = "/usr/caen/bin/klog";
+
+# Command to clear the screen
+$clear = "/usr/bin/clear";
+
+# "Standard" dotfiles to exclude from redot
+@exclude_dotfiles = ();
+
+# Figure out an alternate pager program, if there is one.
+if ($ENV{'PAGER'}) {
+   $alt_pager = $ENV{'PAGER'}
+} else {
+   $alt_pager = $pager;
+}
+
+#
+# Main program
+#
+
+# Pull in the options
+&GetOptions( "help"       => \$opt_help,
+             "h"          => \$opt_help,
+             "example"    => \$opt_example,
+             "skeldir=s"  => \$skeldir,
+             "exclude=s"  => \$opt_exclude,
+             "skipdot"    => \$opt_skipdot,
+             "user=s"     => \$opt_altuser,
+             "version"    => \$opt_version,
+             "v"          => \$opt_version,
+             "nobackup"   => \$opt_nobackup ) or (&usage, exit 1);
+
+# Get the user's kerberos identity if they use the --user flag, make
+# sure they've got an ADMIN principal before using that option
+if ($opt_altuser || $opt_help || $opt_example) {
+   $principal = &getAFSID;
+   @admins = &getAFSAdmins;
+
+   $admin = ((grep /^$principal$/, @admins) == 0) ? 0 : 1;
+
+   if (!($admin) && $opt_altuser) {
+      die "You must be an AFS administrator to use this option.\n";
+   }
+}
+
+(&usage, exit 0) if $opt_help;
+(&example, exit 0) if $opt_example;
+
+#
+# Info about user
+#
+
+# Pull in all their /etc/passwd info
+if ($opt_altuser) {
+
+   # User has supplied a login name
+
+   ($my_login, $my_passwd, $my_uid, $my_gid, $my_quota, $my_comment, $my_gecos,
+      $my_home, $my_shell) = getpwnam $opt_altuser;
+
+} else {
+
+   # Use User's UID to get home directory, etc.
+
+   $my_uid = $<;
+
+   ($my_login, $my_passwd, $my_uid, $my_gid, $my_quota, $my_comment, $my_gecos,
+      $my_home, $my_shell) = getpwuid $my_uid;
+}
+
+# Where do their OldFiles go?
+$oldfiles_link_to = "../.$my_login.backup";
+
+# Set the umask
+umask(0);
+
+# Check to make sure $skeldir is readable
+&exitMsg("I can't access \"${skeldir}\"!\n") if (! -r $skeldir);
+
+# If they've opted to exclude certain dotfiles, figure that out here,
+# before we generate our list of dotfiles/dotdirs
+if ($opt_exclude) {
+   $opt_exclude =~ s/,/ /g;
+   $opt_exclude =~ s/\s\./ /g;
+   $opt_exclude =~ s/^\.//;
+   $opt_exclude =~ s/\s+/ /g;
+   @exclude_dotfiles = split / /, $opt_exclude;
+}
+
+# Pull in the names of all the dotfiles in skeldir
+&getDots;
+
+# Make sure there are dotfiles in the dotfile directory
+if ($#dotfiles < 0 && $#dotdirs < 0 && (scalar(keys %dotlinks) < 0)) {
+   print "\n";
+   &exitMsg("No skeleton dotfiles found in ${skeldir}.\n");
+}
+
+# Print the version only if --version/-v is specified
+if ($opt_version) {
+   &doVersion;
+   exit 0;
+}
+
+# Clear screen, print program version, make sure they want to proceed
+if (!$opt_altuser) {
+   &clearScreen; &doBanner; &giveWarning;
+   print "Checking for common problems...\n\n";
+}
+
+# Check to see if home directory has correct UNIX write permissions.
+# If not, attempt to set them to 0755.
+print "Checking home directory UNIX permissions...\n" if $opt_skipdot;
+&checkHomeUNIXPerms if (!$opt_altuser);
+
+# Is the user's home directory in AFS?
+$home_in_AFS = ($my_home =~ m#^/afs/#) ? 1 : 0;
+
+if ($home_in_AFS) {
+
+   # Make sure ACLs, etc. are set correctly for the home directory
+   print "Checking home directory AFS ACLs...\n" if $opt_skipdot;
+   &fixHomeDirectoryACLs;
+
+   # Check their AFS quota and see if they're anywhere close, exit
+   # if over
+   print "Checking AFS quota...\n" if $opt_skipdot;
+   &checkAFSQuota;
+
+   # Make sure they've got a Public directory
+   print "Checking for a $public directory...\n" if $opt_skipdot;
+   &checkPublicExist;
+
+   # Make sure the ACLs are right for the Public directory
+   print "Checking $public directory AFS ACLs...\n" if $opt_skipdot;
+   &fixPublicDirectoryACLs;
+
+   # Make sure they've got a Private directory
+   print "Checking for a $private directory...\n" if $opt_skipdot;
+   &checkPrivateExist;
+
+   # Make sure the ACLs are right for the Private directory
+   print "Checking $private directory AFS ACLs...\n" if $opt_skipdot;
+   &fixPrivateDirectoryACLs;
+
+   # Make sure the dotfiles won't take more space than they've got
+   # available
+   print "Checking free space...\n" if $opt_skipdot;
+   &checkSpace;
+
+   # Make sure that their OldFiles link exists
+   print "Checking for $oldfiles...\n " if $opt_skipdot;
+   &checkOldFiles;
+
+} else {
+
+   # Make sure they've got a Public directory
+   print "Checking for a $public directory...\n" if $opt_skipdot;
+   &checkPublicExist;
+
+   # Make sure they've got a Private directory
+   print "Checking for a $private directory...\n" if $opt_skipdot;
+   &checkPrivateExist;
+
+}
+
+if ($opt_skipdot) {
+   print "\nBasic checks complete.\n";
+   exit 0;
+}
+
+# Give warning
+
+if (! $opt_altuser) {
+   &clearScreen; &lastChance; &clearScreen;
+}
+
+#
+# Do its voodoo
+#
+
+# Figure out which dotfiles they're missing
+foreach $dotfile (@dotfiles) {
+   if ( ! -e "${my_home}/.${dotfile}" ) {
+      push @missing_dotfiles, $dotfile;
+   }
+}
+
+# Figure out which dotdirs they're missing
+foreach $dotdir (@dotdirs) {
+   if ( ! -e "${my_home}/.${dotdir}" ) {
+      push @missing_dotdirs, $dotdir;
+   }
+}
+
+# Figure out which links they're missing
+foreach $dotlink (sort keys %dotlinks) {
+   if ( ! -e "${my_home}/.${dotlink}" ) {
+      push @missing_dotlinks, $dotlink;
+   }
+}
+
+if ((($#missing_dotfiles >= 0) || ($#missing_dotdirs >= 0) ||
+    ($#missing_dotlinks >= 0)) && (!$opt_altuser)) {
+   print "PLEASE NOTE:\n\n";
+   print "You were missing the following files, directories, or links:\n\n";
+   foreach $dotfile (@missing_dotfiles,@missing_dotdirs,@missing_dotlinks) {
+      print "   .${dotfile}\n";
+   }
+}
+
+foreach $dotfile (@dotfiles,@dotdirs) {
+
+   # Create backups, unless they don't want 'em.
+
+   if ( -e "${my_home}/${public}/.${dotfile}" ) {
+
+      unless ($opt_nobackup) {
+
+         # They want backups
+
+         &backupDot($dotfile) or
+            &exitMsg("I was unable to create a backup .${dotfile} file for" .
+                     " you.\n");
+      } else {
+
+         # They don't want backups
+
+         unless ( -d "${my_home}/${public}/.${dotfile}") {
+
+            # If it's not a directory, just unlink it
+
+            unlink "${my_home}/${public}/.${dotfile}" or
+               &exitMsg("Couldn't remove existing dotfile in your $public " .
+                        "directory: .${dotfile}\n");
+         } else {
+
+            # If it is a directory, kill it and all its contents
+
+            unlinkDir("${my_home}/${public}/.${dotfile}") or
+               &exitMsg("Couldn't remove existing directory in your $public " .
+                        "directory: .${dotfile}\n");
+         }
+      }
+   }
+}
+
+foreach $dotfile (@dotfiles,@dotdirs,keys %dotlinks) {
+
+   # Remove existing dotfiles/dirs, if they exist, from their home directory
+
+   if ( -e "${my_home}/.${dotfile}" || -l "${my_home}/.${dotfile}" ) {
+
+      # backup the existing dotfile if it's not a symbolic link, or if
+      # they haven't specified not to keep backups
+      unless ($opt_nobackup || -l "${my_home}/.${dotfile}") {
+         &backupHomedot($dotfile) or
+            &exitMsg("I was unable to create a backup .${dotfile} file for" .
+                     " you (in your home directory).\n");
+      } else {
+         &unlinkHomedot($dotfile) or
+            &exitMsg("I was unable to remove the .${dotfile} in" .
+                     " your home directory.\n");
+      }
+   }
+}
+
+if ($#dotfiles >= 0) {
+
+   print "\nCopying files...\n\n" if (!$opt_altuser);
+
+   foreach $dotfile (@dotfiles) {
+
+      # Do the standard dot files
+
+      &copyDot($dotfile) or
+         &exitMsg("I was unable to copy the standard .${dotfile} file into" .
+                  " your \"${public}\" directory.\n");
+
+      print "   .${dotfile}\n" if (!$opt_altuser);
+   }
+}
+
+if ($#dotdirs >= 0) {
+
+   print "\nCopying directories...\n\n" if (!$opt_altuser);
+
+   foreach $dotdir (@dotdirs) {
+
+      # Do the standard dot directories
+
+      &copyDot($dotdir) or
+         &exitMsg("I was unable to copy the standard .${dotdir} directory " .
+                  "into your \"${public}\" directory.\n");
+
+      print "   .${dotdir}/\n" if (!$opt_altuser);
+   }
+}
+
+@dotlinks = (keys %dotlinks);
+
+if ($#dotlinks >= 0) {
+
+   print "\nCreating symbolic links...\n\n" if (!$opt_altuser);
+
+   foreach $dotlink (sort keys %dotlinks) {
+
+      $link_from = "$my_home/.$dotlink";
+      $link_to = "$dotlinks{$dotlink}";
+
+      print "   .$dotlink -> $dotlinks{$dotlink}\n" if (!$opt_altuser);
+
+      symlink "$link_to", "$link_from" or
+         &exitMsg("I was unable to create a symlink from .$dotlink to " .
+                  " $dotlinks{$dotlink}.");
+   }
+}
+
+foreach $dotfile (@dotfiles,@dotdirs) {
+
+   # Create symbolic links from their home directory to their Public directory
+
+   &linkDot($dotfile) or
+      &exitMsg("I was unable to create a symlink from the .${dotfile}\n" .
+               "in your home directory to the one in your \"${public}\"\n" .
+               "directory: $!");
+
+}
+
+print "\nDone!\n\nPlease logout and login again.  If you still\n" .
+      "experience problems, please come to ${help_name} in\n" .
+      "${help_address}.\n\n" if (!$opt_altuser);
+
+print "Dotfiles updated for user $opt_altuser.\n" if ($opt_altuser);
+
+#
+# Subroutines
+#
+
+sub fixPrivateDirectoryACLs {
+
+   local %private_directory_acls;
+   local $response;
+   local $user_or_grp;
+
+   # Pull in the ACLs for the Private directory
+   %private_directory_acls = &getAFSACLs("$my_home/$private");
+
+   # Make sure they have complete AFS rights to their Private directory
+   if ($private_directory_acls{"$my_login"} !~ /rlidwka/) {
+      print "PROBLEM DETECTED!\n\n";
+      print "You don't have the correct AFS access priveleges to your\n" .
+            "$private directory!  I will attempt to fix the problem...\n\n";
+      if (!&setAFSACLs("$my_home/$private", $my_login, "rlidwka")) {
+         print "${bell}FAILURE!\n\n" .
+               "For some reason, I was unable to change the ACLs on\n" .
+               "your ${private} directory.  You should probably go to\n" .
+               "${help_name} in ${help_address},\n" .
+               "and have them fix the problem.  Meanwhile, I will\n" .
+               "try to continue.\n\n";
+         print "Continuing";
+         &thinkDot(3);
+      } else {
+         print "Fixed!  Continuing";
+         &thinkDot(3);
+      }
+   }
+
+   # Make sure that other users have no rights to their Private
+   # directory, offer them the option to change it if not
+   if ($private_directory_acls{"system:anyuser"}) {
+      print "POSSIBLE PROBLEM DETECTED!\n\n";
+      print "Your ${private} directory currently allows access to\n" .
+            "other users.  Most users prefer to keep files of a\n" .
+            "personal nature in their ${private} directory, and thus\n" .
+            "don't permit the public to view its contents.  Should\n" .
+            "I remove other users' access to your home directory?\n\n";
+      print "Change ACL? [Y/n] > ";
+      chomp($response = <STDIN>);
+      print "\n";
+      unless ($response =~ /^n/i) {
+         foreach $user_or_grp (keys %private_directory_acls) {
+            unless ($user_or_grp eq "system:administrators" || $user_or_grp
+              eq "$my_login") {
+                  &setAFSACLs("$my_home/$private", "$user_or_grp", "none") or
+                     &exitMsg("This may be an AFS quota or " .
+                              "permissions problem.\n");
+            }
+         }
+         print "Fixed!  Continuing";
+      } else {
+         print "Skipping it!  Continuing";
+      }
+      &thinkDot(3);
+   }
+}
+
+sub checkPrivateExist {
+
+   # Make sure they've got a Private directory
+   if (! -e "$my_home/$private") {
+      print "PROBLEM DETECTED!\n\n";
+      print "You don't have a ${private} directory!  I will attempt to make\n" .
+            "one for you...\n\n";
+      if (mkdir "$my_home/$private", 0700) {
+         if ($home_in_AFS) {
+            # Set the default ACLs
+            %private_directory_acls=&getAFSACLs("$my_home/$private");
+            foreach $user_or_grp (keys %private_directory_acls) {
+               unless ($user_or_grp eq "system:administrators" || $user_or_grp
+                 eq "$my_login") {
+                  &setAFSACLs("$my_home/$private", "$user_or_grp", "none");
+               }
+            }
+         }
+         print "Fixed!  Continuing";
+         &thinkDot(3);
+      } else {
+         &exitMsg("I failed!  This may be a quota or permissions " .
+                  "problem.\n");
+      }
+   }
+}
+
+sub fixPublicDirectoryACLs {
+
+   local %public_directory_acls;
+   local $response;
+
+   # Get the ACLs for the Public directory
+   %public_directory_acls = &getAFSACLs("$my_home/$public");
+
+   # Make sure they have complete AFS rights to their Public directory
+   if ($public_directory_acls{"$my_login"} !~ /rlidwka/) {
+      print "PROBLEM DETECTED!\n\n";
+      print "You don't have the correct AFS access priveleges to your\n" .
+            "${public} directory!  I will attempt to fix the problem...\n\n";
+      if (!setAFSACLs("$my_home/$public", $my_login, "rlidwka")) {
+         &exitMsg("You will need to have the CAEN Hotline fix\n" .
+                  "this before you can run ${PROGRAM}.  The CAEN Hotline" .
+                 " is located\n" .
+                  "in $help_address.\n");
+      } else {
+         print "Fixed!  Continuing";
+         &thinkDot(3);
+      }
+   }
+
+   # Make sure they don't permit more than system:anyuser rl access to
+   # their Public directory.
+   if ($public_directory_acls{"system:anyuser"} =~ /rl.+/) {
+      print "POSSIBLE PROBLEM DETECTED!\n\n";
+      print "Your ${public} directory currently allows more than the\n" .
+            "minimum permissions needed to share files.  Many users\n"  .
+            "prefer to limit these permissions.  Would you prefer to\n" .
+            "allow only \"read\" and \"lookup\" permission to other " .
+            "users?\n\n";
+      print "Change ACL? [Y/n] > ";
+      chomp($response = <STDIN>);
+      print "\n";
+      unless ($response =~ /^n/i) {
+         &setAFSACLs("$my_home/$public", "system:anyuser", "rl") or
+            &exitMsg("I failed!  This may be an AFS quota or permissions " .
+               "problem.\n");
+         print "Fixed!  Continuing";
+      } else {
+         print "Skipping it!  Continuing";
+      }
+      &thinkDot(3);
+   }
+
+   # Make sure the ACLs haven't changed
+   %public_directory_acls = &getAFSACLs("$my_home/$public");
+
+   # Make sure that other users have read/lookup rights on their Public
+   # directory, offer them the option to change it.
+   if ($public_directory_acls{"system:anyuser"} !~ /^rl/) {
+      print "POSSIBLE PROBLEM DETECTED!\n\n";
+      print "Your ${public} directory currently doesn't permit\n"       .
+            "other users to share files.  Many people use their\n"      .
+            "${public} directory to store publicly accessible files.\n" .
+            "Should I give users \"read\" and \"lookup\" rights to your\n" .
+            "${public} directory?\n\n";
+      print "Change ACL? [Y/n] > ";
+      chomp($response = <STDIN>);
+      print "\n";
+      unless ($response =~ /^n/i) {
+         &setAFSACLs("$my_home/$public", "system:anyuser", "rl") or
+            &exitMsg("I failed!  This may be an AFS quota or permissions " .
+               "problem.\n");
+         print "Fixed!  Continuing";
+      } else {
+         print "Skipping it!  Continuing";
+      }
+      &thinkDot(3);
+   }
+}
+
+sub checkPublicExist {
+
+   # Make sure they've got a Public directory
+   if (! -e "$my_home/$public") {
+      print "PROBLEM DETECTED!\n\n";
+      print "You don't have a ${public} directory!  I will attempt to make\n" .
+            "one for you...\n\n";
+      if (mkdir "$my_home/$public", 0755) {
+         if ($home_in_AFS) {
+            # Set the default ACLs
+            &setAFSACLs("$my_home/$public", "system:anyuser", "rl");
+         }
+         print "Fixed!  Continuing";
+         &thinkDot(3);
+      } else {
+         &exitMsg("This may be a quota or permissions " .
+                  "problem.\n");
+      }
+   }
+}
+
+sub checkSpace {
+
+   local $AFSquota;
+   local $AFSused;
+   local $dotfileSize;
+
+   # Figure out how much space the $skeldir dotfiles use up (in Kb)
+   $dotfileSize = &getSizeofDotfiles;
+
+   # Check how much space they've got free in their home directory
+   ($AFSquota, $AFSused) = &getAFSQuota;
+
+   # See if the skel dotfiles will take up more space than is currently
+   # available.
+   if ($AFSused + $dotfileSize >= $AFSquota) {
+      unless ($opt_nobackup) {
+         exitMsg(
+            "The standard dotfiles will take up more space in your home\n" .
+            "directory than you currently have available.  You will need\n" .
+            "to either remove some files or re-run $PROGRAM with the\n" .
+            "\"--nobackup\" flag.  If you do this, however, your existing\n" .
+            "dotfiles will be REMOVED instead of renamed.  Do this only if\n" .
+            "you are certain you don't want your current dotfiles.\n");
+      }
+   }
+
+}
+
+sub checkHomeUNIXPerms {
+
+   # Makes sure that the home directory UNIX perms are r/w.  If not,
+   # try to fix it.
+
+   if (! -w $my_home || ! -r $my_home) {
+      print "PROBLEM DETECTED!\n\n";
+      print "The UNIX permissions on your home directory are set " .
+            "incorrectly!\n";
+      print "I will attempt to fix the problem...\n\n";
+      if (chmod 0755, $my_home) {
+         print "Fixed!  Continuing";
+         &thinkDot(3);
+      } else {
+         &exitMsg("I failed!  This may be an AFS permissions problem.\n");
+      }
+   }
+}
+
+sub checkAFSQuota {
+
+   local $AFSquota;
+   local $AFSused;
+   local $percent_of_quota;
+   local $fs_lq;
+
+   local $bar = "-" x 76;
+
+   # Check how much space they've got free in their home directory
+   ($AFSquota, $AFSused) = &getAFSQuota;
+
+   # Check to make sure we pulled out the right quota information.
+   # If we didn't, they probably aren't authenticated right.
+   unless ($AFSquota == 0) {
+      $percent_of_quota = int($AFSused/$AFSquota * 100);
+   } else {
+      exitMsg("For some reason, I think your AFS quota is 0 kilobytes!\n" .
+              "Make sure you have authenticated correctly.  Then, re-run\n" .
+              "${PROGRAM}.  To authenticate, type the following at a\n" .
+              "UNIX prompt:\n\n" .
+              "${klog} -t -pr ${my_login}\n\n" .
+              "If I report this error next time, you will need to go\n" .
+              "to ${help_name} in ${help_address}.\n");
+   }
+
+   # Warn them if they're close to quota, quit if they're over
+   if ($percent_of_quota >= 95 && $percent_of_quota < 100) {
+      $fs_lq = `$fs listquota $my_home`;
+      print "WARNING!\n\n";
+      print "You are dangerously close to your quota of ${AFSquota}Kb.\n\n" .
+            "$bar\n" .
+            ">>> The following output is from the \"$fs lq\" command:\n\n" .
+            "$fs_lq" .
+            "$bar\n\n" .
+            "If $PROGRAM is able to finish, you should think about\n"     .
+            "removing or compressing some files to make room.\n\n";
+      print "Continuing";
+      &thinkDot(6);
+   } elsif ($percent_of_quota >= 100) {
+      $fs_lq = `$fs listquota $my_home`;
+      exitMsg("You are currently over the maximum AFS disk space you\n"  .
+              "have been allotted.\n\n" .
+              "$bar\n" .
+              ">>> The following output is from the \"$fs lq\" command:\n\n" .
+              "$fs_lq" .
+              "$bar\n\n" .
+              "You will need to remove some files\n"  .
+              "before ${PROGRAM} can run.  You will not be able to save\n" .
+              "or create new files until this happens.\n");
+   }
+}
+
+sub checkOldFiles {
+
+   # Make sure an OldFiles directory exists; if not, create one
+
+   if ( ! -e "$my_home/$oldfiles" ) {
+
+      print "PROBLEM DETECTED!\n\n";
+      print "You don't have an $oldfiles directory!  ";
+      print "I will attempt to fix the problem...\n\n";
+
+      if ( -l "$my_home/$oldfiles" ) {
+         unlink $oldfiles or
+            &exitMsg("I was unable to unlink your existing $oldfiles!\n");
+      }
+
+      symlink "$oldfiles_link_to", "$my_home/$oldfiles" or
+         &exitMsg("I wasn't able to re-link your $oldfiles directory!\n");
+
+      print "Fixed!  Continuing";
+      &thinkDot(3);
+   }
+}
+
+sub fixHomeDirectoryACLs {
+
+   local %home_directory_acls;
+
+   # Pull in each of the home directory ACLs and store them in an
+   # associative array
+   %home_directory_acls = &getAFSACLs("$my_home");
+
+   # Make sure they have all the AFS ACLs required for their home
+   # directory
+   if (($home_directory_acls{"$my_login"} !~ /rlidwka/) ||
+       ($home_directory_acls{"system:administrators"} !~ /rlidwka/)) {
+      print "PROBLEM DETECTED!\n\n" .
+            "You don't have the correct AFS access priveleges to your\n" .
+            "home directory!  I will attempt to fix the problem...\n\n";
+      if (!&setAFSACLs("$my_home", $my_login, "rlidwka") ||
+          !&setAFSACLs("$my_home", "system:administrators", "all")) {
+         &exitMsg("I failed!  Are you authenticated?  Try typing the\n" .
+                  "following at a UNIX prompt and then re-running\n" .
+                  "${PROGRAM}:\n\n" .
+                  "${klog} -t -pr ${my_login}\n\n" .
+                  "If it doesn't work the second time, you will need to\n" .
+                  "have ${help_name} fix this.  ${help_name} is\n" .
+                  "located in ${help_address}.\n");
+      } else {
+         print "Fixed!  Continuing";
+         &thinkDot(3);
+      }
+   }
+
+   # Make sure they don't permit more than system:anyuser rl access to
+   # their home directory.
+   if ($home_directory_acls{"system:anyuser"} =~ /[rlidwka]{2,}/) {
+      print "POSSIBLE PROBLEM DETECTED!\n\n";
+      print "Your home directory currently allows more than the\n"      .
+            "minimum permissions needed to share files.  Many users\n"  .
+            "prefer to limit these permissions.  Would you like to\n" .
+            "allow only \"lookup\" permission to other users?\n\n";
+      print "Change ACL? [Y/n] > ";
+      chomp($response = <STDIN>);
+      print "\n";
+      unless ($response =~ /^n/i) {
+         &setAFSACLs("$my_home", "system:anyuser", "l") or
+            &exitMsg("I failed!  This may be an AFS quota or permissions " .
+               "problem.\n");
+         print "Fixed!  Continuing";
+      } else {
+         print "Skipping it!  Continuing";
+      }
+      &thinkDot(3);
+   }
+
+   # Pull the ACLs in again, in case they've changed
+   %home_directory_acls = &getAFSACLs("$my_home");
+
+   # Make sure they permit at least "system:anyuser l" rights to their
+   # home directory.
+   if ($home_directory_acls{"system:anyuser"} !~ /l/) {
+      print "POSSIBLE PROBLEM DETECTED!\n\n";
+      print "Your home directory currently doesn't permit\n"            .
+            "other users to share files.  In order to access\n"         .
+            "files in subdirectories, e.g. your ${public} directory,\n" .
+            "your home directory must give at least \"lookup\"\n"       .
+            "permission to other users.  Should I allow \"lookup\"\n"   .
+            "permission to other users?\n\n";
+      print "Change ACL? [Y/n] > ";
+      chomp($response = <STDIN>);
+      print "\n";
+      unless ($response =~ /^n/i) {
+         &setAFSACLs("$my_home", "system:anyuser", "l") or
+            &exitMsg("I failed!  This may be an AFS quota or permissions " .
+               "problem.\n");
+         print "Fixed!  Continuing";
+      } else {
+         print "Skipping it!  Continuing";
+      }
+      &thinkDot(3);
+   }
+}
+
+sub getDots {
+
+   local $dotfile;
+   local $dotfileshort;
+
+   if ($#ARGV < 0) {
+
+      while ($dotfile = <$skeldir/std.*>) {
+
+         $dotfileshort = $dotfile;
+
+         # Make sure the file is readable
+         if ( -r $dotfile || -l $dotfile ) {
+
+            # Yank off everything up to the std.
+            $dotfileshort =~ s/.*std\.//g;
+
+            # Only add files that aren't in our exclude list
+            next if (grep /^${dotfileshort}$/, @exclude_dotfiles);
+            if ( -l $dotfile ) {
+               $dotlinks{$dotfileshort} = readlink($dotfile);
+            } elsif ( -d $dotfile ) {
+               push @dotdirs, $dotfileshort;
+            } elsif ( -f $dotfile ) {
+               push @dotfiles, $dotfileshort;
+            }
+         }
+      }
+   } else {
+      foreach $dotfile (@ARGV) {
+         $dotfile =~ s/^\.//g;
+         if ( -r "${skeldir}/std.${dotfile}" ||
+              -l "${skeldir}/std.${dotfile}") {
+            if ( -l "${skeldir}/std.${dotfile}" ) {
+               $dotlinks{$dotfile} = readlink("${skeldir}/std.${dotfile}");
+            } elsif ( -d "${skeldir}/std.${dotfile}" ) {
+               push @dotdirs, $dotfile;
+            } elsif ( -f "${skeldir}/std.${dotfile}" ) {
+               push @dotfiles, $dotfile;
+            }
+         } else {
+            print "\n";
+            &exitMsg("A standard \"$dotfile\" file does not exist," .
+                     " at least not in \"${skeldir}\".\n");
+         }
+      }
+   }
+   if (@dotfiles + @dotdirs + scalar(keys(%dotlinks)) == 0) {
+      print "\n";
+      &exitMsg("No dotfiles found in ${skeldir}!\n");
+   }
+}
+
+sub exitMsg {
+
+   # Prints an error message and dies, giving $contact
+   # information.
+
+   local $message = $_[0];
+
+   die "${bell}FAILURE!\n\n${message}\n${contact}\n";
+}
+
+sub getAFSQuota {
+
+   # Checks the user's AFS quota and returns the quota and the amount
+   # used in bytes
+
+   local $fsoutput; # Output from the FS command
+   local $quota;    # Their quota
+   local $amtused;  # How much they're using
+
+   open(FS, "${fs} listquota $my_home 2>&1 |") or
+      &exitMsg("I can't run the \"${fs} listquota $my_home\" command!");
+   while (<FS>) {
+      next unless m/^\w+\.$my_login\s+/;
+      # A really ugly regular expression to pull out the quota and
+      # amount used
+      ($quota, $amtused) = ($1, $2) if /^\w+\.\w+\s+(\d+)\s+(\d+)\s+/;
+   }
+   ($quota, $amtused);
+}
+
+sub getSizeofDotfiles {
+
+   # Determines the total number of kilobytes that the skeleton dotfiles
+   # in $skeldir use up
+
+   local $dotfile; # Each skeleton dotfile
+   local ($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size);
+   local $dotfile_space;
+
+   $dotfile_space = 0;
+   foreach $dotfile (@dotfiles) {
+      ($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size) =
+         stat "${skeldir}/std.${dotfile}";
+      $dotfile_space += $size;
+   }
+
+   # Return the overall size in kilobytes, rounding up or adding one
+   # just to be on the safe side.
+   $dotfile_space = int($dotfile_space/1024 + 1);
+}
+
+sub getAFSID {
+
+   # Figure out which principal is running this program
+
+   my $id, $kerbname;
+
+   open(TOKENS, "$tokens|") or die "Couldn't run $tokens: $!\n";
+   while (<TOKENS>) {
+      $id = $1 if /\(AFS ID (\d+)\).*\@$ourcell /;
+   }
+
+   open(PTS, "$pts examine $id|") or die "Couldn't run $pts exa command: $!\n";
+   while (<PTS>) {
+      $kerbname = $1 if /Name: (\w+), id:/;
+   }
+
+   $kerbname;
+}
+
+sub getAFSAdmins {
+
+   # Figure out who's in the system:administrators group
+
+   my @admins;
+   my $line;
+
+   open(PTS, "$pts membership system:administrators|") or die 
+      "Couldn't run the $pts membership command\n";
+   while($line=<PTS>) {
+     next if ($line =~ /^Members/);
+     chomp $line;
+     $line =~ s/^\s*//;
+     push @admins, $line;
+   }
+   @admins;
+}
+
+sub getAFSACLs {
+
+   # Determines the AFS ACLs of the directory specified
+
+   local $directory = $_[0];
+   local $group_or_id;
+   local $acl;
+   local %acls;
+
+   open(FS, "${fs} listacl $directory |") or
+      &exitMsg("I can't run the \"${fs} listacl\" command!");
+   while(<FS>) {
+      next unless /^\ \ /;
+      ($group_or_id, $acl) = ($1, $2) if /^\ \ (.*)\ (\w+)$/;
+      $acls{$group_or_id} = $acl; }
+   %acls;
+}
+
+sub setAFSACLs {
+
+   # Set AFS ACLs
+
+   local($directory, $user_or_group, $acl) = @_;
+   local $fs_output;
+   local $status;
+
+   # fs setquota returns 0 whether or not it failed, so we have to look
+   # at the error output.  Nothing should have been printed if it succeeded.
+   open(FS, "${fs} setacl ${directory} ${user_or_group} ${acl} 2>&1 |") or
+      exitMsg("That's weird!  I couldn't run \"${fs} setacl\" command!\n");
+   $fs_output = <FS>;
+
+   $status = length($fs_output) ? 0 : 1;
+}
+
+sub giveWarning {
+
+   # This just makes sure they really, really, REALLY want to go
+   # ahead and redot
+
+   local $response;
+
+   print <<END_OF_WARNING;
+
+                          ########################
+                          #        NOTICE        #
+                          ########################
+
+     This program is designed to detect and fix common problems that may
+be affecting your account.  This program may undo customizations that
+you have previously made to your environment and may create files or
+directories that you have deleted.  It may also change the access
+priveleges for some of your files and directories.  Do not answer "Y" to
+the below question unless you are absolutely certain that you wish to
+proceed.
+
+     If you have any questions, you should contact ${help_name}
+at ${help_phone} or in ${help_address}, before running
+this program.
+
+END_OF_WARNING
+
+   print "Would you like to proceed? [yN] > ";
+   chomp($response = <STDIN>);
+   &clearScreen;
+   unless ($response =~ m/^y/i) {
+      print "No changes made.\n";
+      exit 1;
+   }
+}
+
+sub lastChance {
+
+   # Their last chance to abort this program before it copies dotfiles
+
+   if ($opt_nobackup) {
+      print <<EOT;
+PLEASE READ THE FOLLOWING${bell}
+
+The standard dotfiles will now be copied into your ${public} directory.
+You have opted not to create backups of existing dotfiles.  Therefore,
+if there were previous versions in your ${public} directory or your
+home directory, THEY WILL BE REMOVED.
+EOT
+   } else {
+      print <<EOT;
+PLEASE READ THE FOLLOWING${bell}
+
+The standard dotfiles will now be copied into your ${public} directory.
+If there were previous versions in your ${public} directory, ${PROGRAM} will
+have renamed them <dotfile>.old, where <dotfile> is the name of a dotfile,
+e.g. ".cshrc" will be renamed ".cshrc.old".
+EOT
+   }
+   print <<EOT;
+
+If you DO NOT wish to proceed, press CTRL-C now.
+
+EOT
+
+   &getInput("[ Press ENTER to continue ]");
+}
+
+sub clearScreen {
+
+   # Clears the screen.  Big whoo.
+
+   system("$clear");
+}
+
+sub thinkDot {
+
+   # Prints little dots on the screen as though it were thinking
+
+   local $duration = $_[0];
+   local $c = 0;
+
+   $duration = 0 if ($duration < 0);
+
+   for ($c = 0; $c < $duration; $c++) {
+      sleep 1;
+      print ".";
+   }
+   print "\n\n";
+}
+
+sub backupDot {
+
+   # Save the existing version of a dotfile, as well as two
+   # previous versions, if they exist
+
+   local $dotfileName = $_[0];
+   local $dotfilePublicpath;
+   local $dotfileHomepath;
+   local $exit = 1;
+
+   $dotfilePublicpath = "$my_home/$public/.$dotfileName";
+
+   # Rename the existing dotfile if it's in the Public directory
+   (-e "${dotfilePublicpath}.older" && -e "${dotfilePublicpath}.old" )
+      && unlink "${dotfilePublicpath}.older";
+
+   -e "${dotfilePublicpath}.old" && rename "${dotfilePublicpath}.old",
+      "${dotfilePublicpath}.older";
+
+   -e "${dotfilePublicpath}" && rename "${dotfilePublicpath}",
+      "${dotfilePublicpath}.old" or $exit = 0;
+
+   $exit;
+}
+
+sub backupHomedot {
+
+   # Save the existing version of a in the home directory, as well as two
+   # previous versions, if they exist.  If the existing dotfiles are a link
+   # then they won't be backed up.
+
+   local $dotfileName = $_[0];
+   local $dotfileHomepath;
+   local $exit = 1;
+
+   $dotfileHomepath = "$my_home/.$dotfileName";
+
+   # Rename the existing dotfile if it's in the home directory
+   if ( -e "${dotfileHomepath}" && ! -l "${dotfileHomepath}" ) {
+
+      ( -e "${dotfileHomepath}.older" && -e "${dotfileHomepath}.old" )
+         && unlink "${dotfileHomepath}.older";
+
+      -e "${dotfileHomepath}.old" && rename "${dotfileHomepath}.old",
+         "${dotfileHomepath}.older";
+
+      rename "${dotfileHomepath}", "${dotfileHomepath}.old" or
+         print "Warning: Could not rename ${dotfileHomepath}\n";
+   }
+
+   $exit;
+}
+
+sub copyDot {
+
+   # Copy the $skeldir dotfiles into the Public directory
+
+   local $dotfileName = $_[0];
+   local $dotfileFullpath;
+   local $status;
+
+   $dotfileFullpath = "$my_home/$public/.$dotfileName";
+
+   # Set $status to 1 if the copy succeeds, 0 if it fails
+   # Copy recursively, if the dotfile is a directory
+   if ( -d "${skeldir}/std.${dotfileName}" ) {
+      $status = (system("${cp} -r ${skeldir}/std.${dotfileName} " .
+         "$dotfileFullpath 2>&1")
+         == 0) ? 1 : 0;
+   } else {
+      $status = (system("${cp} ${skeldir}/std.${dotfileName} " .
+         "$dotfileFullpath 2>&1")
+         == 0) ? 1 : 0;
+   }
+
+   # Set the right UNIX permissions if the copy succeeded
+   (chmod 0755, $dotfileFullpath) if $status;
+
+   $status;
+}
+
+sub unlinkDir {
+
+   # Does system call to remove a directory and all its contents
+
+   local $status;
+   local $directory;
+
+   $directory = $_[0];
+
+   if ( -d $directory ) {
+      $status = (system("${rm} -rf ${directory} 2>&1")
+         == 0) ? 1 : 0;
+   } else {
+      $status = 0;
+   }
+}
+
+sub unlinkHomedot {
+
+   # Remove the dotfiles in the home directory.  Give a warning if the
+   # dotfiles aren't already symbolic links, e.g. their original file
+   # was in their home directory instead of their Public one.
+
+   local $dotfileName = $_[0];
+   local $dotfileFullpath;
+   local $status;
+   
+   $dotfileFullpath = "$my_home/.$dotfileName";
+
+   if (!(-d "$dotfileFullpath")) {
+      $status = unlink $dotfileFullpath;
+   } else {
+      $status = unlinkDir($dotfileFullpath);
+   }
+}
+
+sub linkDot {
+
+   # Create a symbolic link from their home directory to
+   # the appropriate dotfile in their Public directory
+
+   local $dotfileName = $_[0];
+   local $linkFrom, $linkTo;
+   local $status;
+
+   $link_from = "${public}/.${dotfileName}";
+   $link_to = "${my_home}/.${dotfileName}";
+
+   $status = symlink $link_from, $link_to;
+}
+
+sub getInput {
+
+   # Prompt user for input
+
+   print @_;
+
+   $return = <STDIN>;
+
+}
+
+sub usage {
+
+   # Prints instructions on the proper use of this program
+
+   print <<EOT;
+Usage: ${PROGRAM} [dotfiles] [options]
+
+Options:
+
+  --example:  print a long description of the usage of this program
+  --exclude:  tell $PROGRAM to skip dotfiles called <"dotfile list">
+     --help:  print this message
+ --nobackup:  run ${PROGRAM} without creating backups of existing dotfiles
+  --skeldir:  tell $PROGRAM to use <directory> as skel directory
+  --skipdot:  do only basic checks, $PROGRAM won't update any dotfiles
+  --version:  print $PROGRAM version
+
+EOT
+
+   if ($admin) {
+       print <<EOT;
+Administrator options:
+
+     --user:  run $PROGRAM on <user>'s home directory
+
+EOT
+   }
+
+}
+
+sub example {
+
+   local $SIG{PIPE} =
+      sub {
+         print "UH OH!\n\n";
+         print "I couldn't run your pager program.  Try typing the following\n";
+         print "at your command prompt and re-running ${PROGRAM}:\n\n";
+         print "setenv PAGER ${pager}\n\n";
+      };
+
+   # Prints an example usage for this program
+   if (! (open(PAGER, "|${alt_pager}"))) {
+      print "Couldn't find your pager program.  I'll use $pager instead.\n";
+      open(PAGER, "|$pager") or die "I couldn't run that either.  I give up!\n";
+   }
+
+   &clearScreen;
+   print PAGER "${PROGRAM} v${REV}; ${RDATE}\n\n";
+
+   print PAGER <<EOT;
+PROGRAM SUMMARY
+---------------
+
+When ${PROGRAM} runs, it looks in a predefined "skeleton" directory for any
+files or directories with names beginning with "std".  It then copies these
+"standard" dotfiles into a user's ${public} directory.
+
+Before copying files, ${PROGRAM} checks the following things, and prompts
+for input where necessary:
+
+   o The UNIX permissions on the user's home directory
+   o The AFS permissions on the user's home directory (if applicable)
+     - checks to see if "system:anyuser" access is "lookup" only
+     - checks to make sure the owner has the appropriate rights
+   o The existence of a ${public} directory, and its permissions
+     - creates it if it doesn't exist
+     - checks to see if "system:anyuser" has "read" access and the owner
+       has "all"
+   o The existence of a ${private} directory, and its permissions
+     - creates it if it doesn't exist
+     - checks to see that only the owner has "all" permissions and that
+       no other access is allowed
+   o The status of the user's AFS quota (if applicable)
+     - warn them if close to quota
+     - exit if over quota
+   o The amount of space the new dotfiles will take up, and whether or
+     not they will fit in the user's directory, based on their disk
+     usage.
+
+Once all of these criteria have passed, ${PROGRAM} will then proceed with
+copying.
+
+OPTIONS
+-------
+
+${PROGRAM} has the following command-line options:
+
+--example
+      Print a verbose message, detailing the program's functionality
+      and usage.
+
+--exclude=exclude_list
+      By default, when ${PROGRAM} runs, it copies *all* files from the
+      "skeleton" directory.  This option allows a user to exclude certain
+      files from the copy list.  This list should be space or comma
+      delimeted, and surrounded with quotes, if necessary.  For example:
+
+      $PROGRAM --exclude=.cshrc,.login
+
+      - or -
+
+      $PROGRAM --exclude ".cshrc .login"
+
+      would copy all standard dotfiles, except .login and .cshrc.
+   
+--help
+      Print a brief usage statement.
+
+--nobackup
+      This option disables the automatic backup of existing dotfiles.
+      It should be used with extreme caution.
+
+--skeldir=directory
+      This option changes the default directory from which "standard"
+      dotfiles should be copied.  For example:
+
+      $PROGRAM --skeldir ~/skel --exclude .Xresources
+
+      would copy all files, except .Xresources,  beginning with "std"
+      from the "skel" directory in your home directory.
+
+      - or -
+
+      $PROGRAM --skeldir=/usr/local/skel .cshrc .login
+
+      would copy only the standard .cshrc and .login files from the
+      /usr/local/skel directory.
+
+--skipdot
+      Tell $PROGRAM to only do basic checks, e.g. permissions, directories,
+      etc., but not to copy any dotfiles.
+
+--version
+      Print the version of $PROGRAM.
+
+EOT
+   if ($admin) {
+      print PAGER <<EOT;
+ADMINISTRATOR OPTIONS:
+
+--user
+      Tell $PROGRAM to use <user>'s home directory to do basic checks
+      and copy dotfiles.  For example:
+
+      $PROGRAM --user joeuser .Xdefaults
+
+      would give "joeuser" a new .Xdefaults file.  Note that when this
+      option is used, ${PROGRAM}'s output is much less verbose.
+      Additionally, $PROGRAM will run WITHOUT ASKING PERMISSION, so it
+      must be used with discretion.
+
+      This option can only be used by an AFS administrator.
+
+EOT
+   }
+
+   close PAGER;
+}
+
+sub doBanner {
+
+   # prints the name of this program with version info, etc.
+
+   print "${PROGRAM} v${REV}; ${RDATE}\n\n";
+}
+
+sub doVersion {
+
+   # Prints out the program's version
+
+   print "${PROGRAM} v${REV}; ${RDATE}\n";
+   
+}
+
+sub abort {
+
+   # Exit prettily
+
+   print "\n\nAborting $PROGRAM...\n\n";
+
+   exit(1);
+
+}
