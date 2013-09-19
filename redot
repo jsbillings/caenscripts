@@ -1,6 +1,9 @@
 #!/usr/um/bin/perl5
 
 # $Log: redot,v $
+# Revision 1.1  2013/09/03 12:56:41  jsbillin
+# Initial revision
+#
 # Revision 2.0  1999/08/06 20:53:38  stormy
 # Expanded fixes for missing directories and other AFS problems
 # Added ability to redot specific files, or exclude specific files
@@ -27,11 +30,11 @@ $| = 1;
 $SIG{'INT'} = 'abort';
 
 # The revision number of this program
-$REV  =  '$Revision: 2.0 $';
+$REV  =  '$Revision: 1.1 $';
 $REV  =~ s/.*Revision: |\ \$$//g;
 
 # The date this program was last modified
-$RDATE =  '$Date: 1999/08/06 20:53:38 $';
+$RDATE =  '$Date: 2013/09/03 12:56:41 $';
 $RDATE =~ s/.*Date: |\ \$$//g;
 
 # Preserve the original command line for logging purposes
@@ -65,9 +68,6 @@ $contact = "Please call ${help_name} at ${help_phone} if you have questions.\n";
 # The bell
 $bell = "\007";
 
-# The UNIX quota command
-$quota = "/usr/ucb/quota";
-
 # The AFS fs command
 if (-x "/usr/caen/bin/fs") {
    $fs = "/usr/caen/bin/fs";
@@ -87,10 +87,10 @@ if (-x "/usr/caen/bin/pts") {
 }
 
 # Local AFS cell
-$ourcell = "engin.umich.edu";
+$ourcell = "umich.edu";
 
 # The AFS tokens command
-$tokens = "/usr/um/bin/tokens";
+$tokens = "/usr/bin/tokens";
 
 # The UNIX cp command
 $cp = "/bin/cp";
@@ -108,7 +108,7 @@ $private = "Private";
 $oldfiles = "OldFiles";
 
 # Location of the "klog" command
-$klog = "/usr/caen/bin/klog";
+$klog = "/usr/bin/klog";
 
 # Command to clear the screen
 $clear = "/usr/bin/clear";
