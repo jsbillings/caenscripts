@@ -1,6 +1,11 @@
 #!/usr/um/bin/perl5
 
 # $Log: redot,v $
+# Revision 1.3  2013/09/23 19:56:03  jsbillin
+# Disabled OldFiles check, unneeded
+# skel directory is now /usr/caen/skel
+# fixed perl syntax problems
+#
 # Revision 1.2  2013/09/19 12:38:10  jsbillin
 # Fixing paths for certain commands, switching to umich.edu cell
 #
@@ -33,11 +38,11 @@ $| = 1;
 $SIG{'INT'} = 'abort';
 
 # The revision number of this program
-$REV  =  '$Revision: 1.2 $';
+$REV  =  '$Revision: 1.3 $';
 $REV  =~ s/.*Revision: |\ \$$//g;
 
 # The date this program was last modified
-$RDATE =  '$Date: 2013/09/19 12:38:10 $';
+$RDATE =  '$Date: 2013/09/23 19:56:03 $';
 $RDATE =~ s/.*Date: |\ \$$//g;
 
 # Preserve the original command line for logging purposes
@@ -1065,7 +1070,7 @@ PLEASE READ THE FOLLOWING${bell}
 The standard dotfiles will now be copied into your ${public} directory.
 If there were previous versions in your ${public} directory, ${PROGRAM} will
 have renamed them <dotfile>.old, where <dotfile> is the name of a dotfile,
-e.g. ".cshrc" will be renamed ".cshrc.old".
+e.g. ".bashrc" will be renamed ".bashrc.old".
 EOT
    }
    print <<EOT;
@@ -1339,13 +1344,13 @@ ${PROGRAM} has the following command-line options:
       files from the copy list.  This list should be space or comma
       delimeted, and surrounded with quotes, if necessary.  For example:
 
-      $PROGRAM --exclude=.cshrc,.login
+      $PROGRAM --exclude=.bashrc,.bash_profile
 
       - or -
 
-      $PROGRAM --exclude ".cshrc .login"
+      $PROGRAM --exclude ".bashrc .bash_profile"
 
-      would copy all standard dotfiles, except .login and .cshrc.
+      would copy all standard dotfiles, except .bashrc and .bash_profile.
    
 --help
       Print a brief usage statement.
@@ -1365,9 +1370,9 @@ ${PROGRAM} has the following command-line options:
 
       - or -
 
-      $PROGRAM --skeldir=/usr/local/skel .cshrc .login
+      $PROGRAM --skeldir=/usr/local/skel .bashrc .bash_profile
 
-      would copy only the standard .cshrc and .login files from the
+      would copy only the standard .bashrc and .bash_profile files from the
       /usr/local/skel directory.
 
 --skipdot
