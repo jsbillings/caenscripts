@@ -1,6 +1,9 @@
 #!/usr/um/bin/perl5
 
 # $Log: redot,v $
+# Revision 1.2  2013/09/19 12:38:10  jsbillin
+# Fixing paths for certain commands, switching to umich.edu cell
+#
 # Revision 1.1  2013/09/03 12:56:41  jsbillin
 # Initial revision
 #
@@ -30,11 +33,11 @@ $| = 1;
 $SIG{'INT'} = 'abort';
 
 # The revision number of this program
-$REV  =  '$Revision: 1.1 $';
+$REV  =  '$Revision: 1.2 $';
 $REV  =~ s/.*Revision: |\ \$$//g;
 
 # The date this program was last modified
-$RDATE =  '$Date: 2013/09/03 12:56:41 $';
+$RDATE =  '$Date: 2013/09/19 12:38:10 $';
 $RDATE =~ s/.*Date: |\ \$$//g;
 
 # Preserve the original command line for logging purposes
@@ -48,10 +51,10 @@ $RDATE =~ s/.*Date: |\ \$$//g;
 #
 
 # Name of the pager program (e.g. more) to use
-$pager = "/usr/bin/more";
+$pager = "/bin/more";
 
 # Location of skel directory
-$skeldir = "/afs/engin.umich.edu/caen/generic/skel";
+$skeldir = "/usr/caen/skel";
 
 # Name of the computer help
 $help_name = "the CAEN Hotline";
@@ -105,7 +108,7 @@ $public = "Public";
 $private = "Private";
 
 # Name of the OldFiles directory
-$oldfiles = "OldFiles";
+$oldfiles = ".oldfiles";
 
 # Location of the "klog" command
 $klog = "/usr/bin/klog";
@@ -258,8 +261,9 @@ if ($home_in_AFS) {
    &checkSpace;
 
    # Make sure that their OldFiles link exists
-   print "Checking for $oldfiles...\n " if $opt_skipdot;
-   &checkOldFiles;
+   # -- disabled by jsbillin 2013-09-23
+   # print "Checking for $oldfiles...\n " if $opt_skipdot;
+   # checkOldFiles();
 
 } else {
 
@@ -937,7 +941,7 @@ sub getAFSID {
 
    # Figure out which principal is running this program
 
-   my $id, $kerbname;
+   my ($id, $kerbname);
 
    open(TOKENS, "$tokens|") or die "Couldn't run $tokens: $!\n";
    while (<TOKENS>) {
@@ -1219,7 +1223,7 @@ sub linkDot {
    # the appropriate dotfile in their Public directory
 
    local $dotfileName = $_[0];
-   local $linkFrom, $linkTo;
+   local ($linkFrom, $linkTo);
    local $status;
 
    $link_from = "${public}/.${dotfileName}";
