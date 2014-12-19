@@ -1,0 +1,85 @@
+#!/bin/sh
+
+PATH="/usr/kerberos/bin:/bin:/usr/bin"
+export PATH
+
+# Get an AFS token for an arbitrary user/cell, using krb5.  Doing this 
+# with aklog would be better, but would probably require much 
+# modification in aklog.
+
+KRB5CCNAME=""
+cleanup()
+{
+	[ -n "$KRB5CCNAME" ] && kdestroy -5
+}
+
+# make sure that the ticket file is erased if are killed
+trap cleanup 1 2 3 15
+
+die()
+{
+	[ -n "$1" ] && echo "$1" 1>&2
+
+	cleanup
+	exit 1
+}
+
+usage()
+{
+	die "Usage: gettoken [user | user@cell | @cell]"
+}
+
+
+[ $# -eq 0 -o $# -eq 1 ] || usage
+
+
+_oldifs=$IFS
+IFS="@"
+set -- $1
+IFS=$_oldifs
+
+[ $# -eq 0 -o $# -eq 1 -o $# -eq 2 ] || usage
+
+CELL=""
+if [ $# -eq 1 ]; then
+	USER="$1"
+else
+	USER="$1"
+	CELL="$2"
+fi
+
+if [ ! -n "$USER" ]; then
+	USER=`id -un`
+fi
+
+# Uppercase the cell to be stupid.  There is no standard way to do 
+# krb5_realm_of_afs_cell().  The hack used by the PAM module is to find 
+# the DNS name of the AFS database server and do krb5_realm_of_host() on 
+# that.
+
+if [ -n "$CELL" ]; then
+	REALM=`echo "$CELL" |tr 'a-z' 'A-Z'`
+	PRINCIPAL="${USER}@${REALM}"
+else
+	PRINCIPAL="$USER"
+fi
+
+
+KRB5CCNAME=`mktemp /tmp/krb5.gettoken.XXXXXX`
+[ $? -eq 0 ] || die
+
+export KRB5CCNAME
+kinit -5 -l 30d "$PRINCIPAL"
+[ $? -eq 0 ] || die
+
+
+if [ -n "$CELL" ]; then
+	aklog -cell "$CELL" -k "$REALM"
+	rc=$?
+else
+	aklog
+	rc=$?
+fi
+
+cleanup
+exit $rc

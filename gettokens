@@ -1,0 +1,89 @@
+#!/bin/sh
+
+PATH="/usr/kerberos/bin:/bin:/usr/bin:/usr/local/bin"
+export PATH
+
+# Get AFS tokens for the umich.edu cell, and the engin.umich.edu (not any more)
+# (if applicable)
+
+OLD_KRB5CCNAME="$KRB5CCNAME"
+
+KRB5CCNAME=""
+GETTGT=0
+cleanup()
+{
+	[ -n "$KRB5CCNAME" -a $GETTGT -eq 0 ] && kdestroy -5
+}
+
+# make sure that the ticket file is erased if are killed
+trap cleanup 1 2 3 15
+
+die()
+{
+	[ -n "$1" ] && echo "$1" 1>&2
+
+	cleanup
+	exit 1
+}
+
+usage()
+{
+	die "Usage: gettokens [-tgt] [<user>]"
+}
+
+
+[ $# -eq 0 -o $# -eq 1 -o $# -eq 2 ] || usage
+
+
+if [ $# -eq 0 ]; then
+	USER=`id -un`
+elif [ $# -eq 1 ]; then
+	if [ "$1" = "-tgt" ]; then
+		GETTGT=1
+	else
+		USER="$1"
+	fi
+elif [ $# -eq 2 ]; then
+	if [ "$1" = "-tgt" ]; then
+		USER="$2"
+	elif [ "$2" = "-tgt" ]; then
+		USER="$1"
+	else
+		usage
+	fi
+fi
+
+PRINCIPAL="${USER}@UMICH.EDU"
+
+
+if [ $GETTGT -eq 0 ]; then
+	KRB5CCNAME=`mktemp /tmp/krb5.gettoken.XXXXXX`
+	[ $? -eq 0 ] || die
+else
+	if [ -n "$OLD_KRB5CCNAME" ]; then
+		OLD_KRB5CCNAME=`echo "$OLD_KRB5CCNAME" |sed 's/^FILE://'`
+	else
+		OLD_KRB5CCNAME="/tmp/krb5cc_`id -u`"
+	fi
+
+	rm -f "$OLD_KRB5CCNAME"
+	[ $? -eq 0 ] || die
+
+	KRB5CCNAME=`mktemp "$OLD_KRB5CCNAME"`
+	[ $? -eq 0 ] || die
+fi
+
+export KRB5CCNAME
+kinit -5 -l 30d "$PRINCIPAL"
+[ $? -eq 0 ] || die
+
+
+aklog -cell umich.edu -k UMICH.EDU
+rc=$?
+
+# this may fail, if the user does not have a CAEN account.
+# So ignore the return value for now.
+#gssklog -cell engin.umich.edu
+
+cleanup
+exit $rc
