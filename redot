@@ -142,23 +142,9 @@ GetOptions( "help"       => \$opt_help,
             "skeldir=s"  => \$skeldir,
             "exclude=s"  => \$opt_exclude,
             "skipdot"    => \$opt_skipdot,
-            "user=s"     => \$opt_altuser,
             "version"    => \$opt_version,
             "v"          => \$opt_version,
             "nobackup"   => \$opt_nobackup ) or (usage(), exit 1);
-
-# Get the user's kerberos identity if they use the --user flag, make
-# sure they've got an ADMIN principal before using that option
-if ($opt_altuser || $opt_help || $opt_example) {
-    $principal = getAFSID();
-    @admins = getAFSAdmins();
-
-    $admin = ((grep /^$principal$/, @admins) == 0) ? 0 : 1;
-
-    if (!($admin) && $opt_altuser) {
-        die "You must be an AFS administrator to use this option.\n";
-    }
-}
 
 (usage(), exit 0) if $opt_help;
 (example(), exit 0) if $opt_example;
@@ -168,25 +154,14 @@ if ($opt_altuser || $opt_help || $opt_example) {
 #
 
 # Pull in all their /etc/passwd info
-if ($opt_altuser) {
+# Use User's UID to get home directory, etc.
 
-    # User has supplied a login name
-
-    ($my_login, $my_passwd, $my_uid, $my_gid, $my_quota, $my_comment, $my_gecos,
-     $my_home, $my_shell) = getpwnam $opt_altuser;
-
-} else {
-
-    # Use User's UID to get home directory, etc.
-
-    $my_uid = $<;
-
-    ($my_login, $my_passwd, $my_uid, $my_gid, $my_quota, $my_comment, $my_gecos,
-     $my_home, $my_shell) = getpwuid $my_uid;
-}
+$my_uid = $<;
 
 # Where do their OldFiles go?
 $oldfiles_link_to = "../.$my_login.backup";
+($my_login, $my_passwd, $my_uid, $my_gid, $my_quota, $my_comment, $my_gecos,
+ $my_home, $my_shell) = getpwuid $my_uid;
 
 # Set the umask
 umask(0);
@@ -220,15 +195,13 @@ if ($opt_version) {
 }
 
 # Clear screen, print program version, make sure they want to proceed
-if (!$opt_altuser) {
-    clearScreen(); doBanner(); giveWarning();
-    print "Checking for common problems...\n\n";
-}
+clearScreen(); doBanner(); giveWarning();
+print "Checking for common problems...\n\n";
 
 # Check to see if home directory has correct UNIX write permissions.
 # If not, attempt to set them to 0755.
 print "Checking home directory UNIX permissions...\n" if $opt_skipdot;
-checkHomeUNIXPerms if (!$opt_altuser);
+checkHomeUNIXPerms();
 
 # Is the user's home directory in AFS?
 $home_in_AFS = ($my_home =~ m#^/afs/#) ? 1 : 0;
@@ -288,10 +261,7 @@ if ($opt_skipdot) {
 }
 
 # Give warning
-
-if (! $opt_altuser) {
     clearScreen(); lastChance(); clearScreen();
-}
 
 #
 # Do its voodoo
@@ -319,7 +289,7 @@ foreach $dotlink (sort keys %dotlinks) {
 }
 
 if ((($#missing_dotfiles >= 0) || ($#missing_dotdirs >= 0) ||
-         ($#missing_dotlinks >= 0)) && (!$opt_altuser)) {
+         ($#missing_dotlinks >= 0))) {
     print "PLEASE NOTE:\n\n";
     print "You were missing the following files, directories, or links:\n\n";
     foreach $dotfile (@missing_dotfiles,@missing_dotdirs,@missing_dotlinks) {
@@ -385,7 +355,7 @@ foreach $dotfile (@dotfiles,@dotdirs,keys %dotlinks) {
 
 if ($#dotfiles >= 0) {
 
-    print "\nCopying files...\n\n" if (!$opt_altuser);
+    print "\nCopying files...\n\n";
 
     foreach $dotfile (@dotfiles) {
 
@@ -395,13 +365,13 @@ if ($#dotfiles >= 0) {
             exitMsg("I was unable to copy the standard .${dotfile} file into" .
                          " your \"${public}\" directory.\n");
 
-        print "   .${dotfile}\n" if (!$opt_altuser);
+        print "   .${dotfile}\n";
     }
 }
 
 if ($#dotdirs >= 0) {
 
-    print "\nCopying directories...\n\n" if (!$opt_altuser);
+    print "\nCopying directories...\n\n";
 
     foreach $dotdir (@dotdirs) {
 
@@ -411,7 +381,7 @@ if ($#dotdirs >= 0) {
             exitMsg("I was unable to copy the standard .${dotdir} directory " .
                          "into your \"${public}\" directory.\n");
 
-        print "   .${dotdir}/\n" if (!$opt_altuser);
+        print "   .${dotdir}/\n";
     }
 }
 
@@ -419,14 +389,14 @@ if ($#dotdirs >= 0) {
 
 if ($#dotlinks >= 0) {
 
-    print "\nCreating symbolic links...\n\n" if (!$opt_altuser);
+    print "\nCreating symbolic links...\n\n";
 
     foreach $dotlink (sort keys %dotlinks) {
 
         $link_from = "$my_home/.$dotlink";
         $link_to = "$dotlinks{$dotlink}";
 
-        print "   .$dotlink -> $dotlinks{$dotlink}\n" if (!$opt_altuser);
+        print "   .$dotlink -> $dotlinks{$dotlink}\n";
 
         symlink "$link_to", "$link_from" or
             exitMsg("I was unable to create a symlink from .$dotlink to " .
@@ -447,9 +417,9 @@ foreach $dotfile (@dotfiles,@dotdirs) {
 
 print "\nDone!\n\nPlease logout and login again.  If you still\n" .
     "experience problems, please come to ${help_name} in\n" .
-    "${help_address}.\n\n" if (!$opt_altuser);
+    "${help_address}.\n\n";
 
-print "Dotfiles updated for user $opt_altuser.\n" if ($opt_altuser);
+print "Dotfiles updated for user $my_login.\n";
 
 #
 # Subroutines
