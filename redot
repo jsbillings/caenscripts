@@ -171,7 +171,7 @@ print "Checking for common problems...\n\n";
 
 # Check to see if home directory has correct UNIX write permissions.
 # If not, attempt to set them to 0755.
-print "Checking home directory UNIX permissions...\n" if $opt_skipdot;
+print "Checking home directory UNIX permissions...\n";
 checkHomeUNIXPerms();
 
 # Is the user's home directory in AFS?
@@ -180,43 +180,43 @@ $home_in_AFS = ($my_home =~ m#^/afs/#) ? 1 : 0;
 if ($home_in_AFS) {
 
     # Make sure ACLs, etc. are set correctly for the home directory
-    print "Checking home directory AFS ACLs...\n" if $opt_skipdot;
+    print "Checking home directory AFS ACLs...\n";
     fixHomeDirectoryACLs();
 
     # Check their AFS quota and see if they're anywhere close, exit
     # if over
-    print "Checking AFS quota...\n" if $opt_skipdot;
+    print "Checking AFS quota...\n";
     checkAFSQuota();
 
     # Make sure they've got a Public directory
-    print "Checking for a $public directory...\n" if $opt_skipdot;
+    print "Checking for a $public directory...\n";
     checkPublicExist();
 
     # Make sure the ACLs are right for the Public directory
-    print "Checking $public directory AFS ACLs...\n" if $opt_skipdot;
+    print "Checking $public directory AFS ACLs...\n";
     fixPublicDirectoryACLs();
 
     # Make sure they've got a Private directory
-    print "Checking for a $private directory...\n" if $opt_skipdot;
+    print "Checking for a $private directory...\n";
     checkPrivateExist();
 
     # Make sure the ACLs are right for the Private directory
-    print "Checking $private directory AFS ACLs...\n" if $opt_skipdot;
+    print "Checking $private directory AFS ACLs...\n";
     fixPrivateDirectoryACLs();
 
     # Make sure the dotfiles won't take more space than they've got
     # available
-    print "Checking free space...\n" if $opt_skipdot;
+    print "Checking free space...\n";
     checkSpace();
 
 } else {
 
     # Make sure they've got a Public directory
-    print "Checking for a $public directory...\n" if $opt_skipdot;
+    print "Checking for a $public directory...\n";
     checkPublicExist();
 
     # Make sure they've got a Private directory
-    print "Checking for a $private directory...\n" if $opt_skipdot;
+    print "Checking for a $private directory...\n";
     checkPrivateExist();
 
 }
