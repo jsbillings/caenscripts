@@ -1,19 +1,19 @@
-#!/bin/sh
+#!/bin/bash
 
-PATH="/usr/kerberos/bin:/bin:/usr/bin:/usr/local/bin"
-export PATH
+export PATH="/usr/kerberos/bin:/bin:/usr/bin:/usr/local/bin"
+progname=$(basename "$0")
 
 # Get AFS tokens for the umich.edu cell
 
 die()
 {
-	[ -n "$1" ] && echo "$1" 1>&2
-	exit 1
+    [ -n "$1" ] && echo "$1" 1>&2
+    exit 1
 }
 
 usage()
 {
-	die "Usage: gettokens [<user>]"
+    die "Usage: $progname [-h] [<user>]"
 }
 
 
@@ -23,7 +23,11 @@ usage()
 if [ $# -eq 0 ]; then
     USER=`id -un`
 else
-    USER=$1
+    if [ $1 == "-h" ]; then
+        usage
+    else
+        USER="$1"
+    fi
 fi
 
 PRINCIPAL="${USER}@UMICH.EDU"
