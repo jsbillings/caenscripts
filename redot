@@ -158,8 +158,6 @@ GetOptions( "help"       => \$opt_help,
 
 $my_uid = $<;
 
-# Where do their OldFiles go?
-$oldfiles_link_to = "../.$my_login.backup";
 ($my_login, $my_passwd, $my_uid, $my_gid, $my_quota, $my_comment, $my_gecos,
  $my_home, $my_shell) = getpwuid $my_uid;
 
@@ -237,11 +235,6 @@ if ($home_in_AFS) {
     # available
     print "Checking free space...\n" if $opt_skipdot;
     checkSpace();
-
-    # Make sure that their OldFiles link exists
-    # -- disabled by jsbillin 2013-09-23
-    # print "Checking for $oldfiles...\n " if $opt_skipdot;
-    # checkOldFiles();
 
 } else {
 
@@ -702,29 +695,6 @@ sub checkAFSQuota {
                                         "You will need to remove some files\n"  .
                                             "before ${PROGRAM} can run.  You will not be able to save\n" .
                                                 "or create new files until this happens.\n");
-    }
-}
-
-sub checkOldFiles {
-
-    # Make sure an OldFiles directory exists; if not, create one
-
-    if ( ! -e "$my_home/$oldfiles" ) {
-
-        print "PROBLEM DETECTED!\n\n";
-        print "You don't have an $oldfiles directory!  ";
-        print "I will attempt to fix the problem...\n\n";
-
-        if ( -l "$my_home/$oldfiles" ) {
-            unlink $oldfiles or
-                exitMsg("I was unable to unlink your existing $oldfiles!\n");
-        }
-
-        symlink "$oldfiles_link_to", "$my_home/$oldfiles" or
-            exitMsg("I wasn't able to re-link your $oldfiles directory!\n");
-
-        print "Fixed!  Continuing";
-        thinkDot(3);
     }
 }
 
